@@ -51,7 +51,7 @@ class OverlayAlertService : Service() {
             }
         }
 
-        handler.postDelayed(showRunnable!!, 1000) // 1 second delay
+        handler.postDelayed(showRunnable!!, 3000) // 3 second delay
         return START_NOT_STICKY
     }
 
@@ -70,7 +70,7 @@ class OverlayAlertService : Service() {
 
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), topInset + dp(10), dp(20), dp(18))
+            setPadding(dp(20), dp(16), dp(20), dp(18))
             background = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
                 setColor(Color.parseColor("#D92D20"))
@@ -117,7 +117,7 @@ class OverlayAlertService : Service() {
         ).apply {
             gravity = Gravity.TOP
             x = 0
-            y = 0
+            y = topInset + dp(70)
         }
 
         overlayView = container
@@ -135,7 +135,7 @@ class OverlayAlertService : Service() {
             stopSelf()
         }
 
-        handler.postDelayed(hideRunnable!!, 3000) // visible for 3 sec
+        handler.postDelayed(hideRunnable!!, 6500) // visible for 6.5 sec
     }
 
     private fun getStatusBarHeight(): Int {

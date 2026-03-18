@@ -4,19 +4,23 @@ import java.util.Locale
 import kotlin.math.max
 import kotlin.math.min
 
-data class FraudResult(
+enum class FraudLabel {
+    SAFE,
+    MOSTLY_SAFE,
+    SUSPICIOUS,
+    FRAUD
+}
+
+data class FraudAnalysisResult(
     val score: Int,
-    val riskLevel: String,
-    val category: String,
+    val label: FraudLabel,
     val reasons: List<String>,
-    val safeSignals: List<String>,
-    val mlScore: Float = 0f,
-    val linkCount: Int = 0
+    val safeSignals: List<String>
 )
 
-object FraudDetector {
+object FraudScoringEngine {
 
-    private val safeWords = listOf(
+    private val safeWords = setOf(
         "otp",
         "credited",
         "debited",
@@ -83,70 +87,83 @@ object FraudDetector {
     )
 
     private val urlRegex = Regex(
-        """(?i)\b((?:https?://|www\.)[^\s]+|(?:[a-z0-9-]+\.)+(?:com|in|org|net|co\.in|gov\.in))"""
+        pattern = """(?i)\b((?:https?://|www\.)[^\s]+)""",
+        option = RegexOption.IGNORE_CASE
     )
 
-    fun analyzeMessage(
+    fun analyze(
         sender: String?,
         message: String,
-        sourceApp: String = "SMS",
-        isSavedContact: Boolean = false
-    ): FraudResult {
+        isSavedContact: Boolean = false,
+        hasRecentConversation: Boolean = false,
+        isFrequentlyContacted: Boolean = false,
+        sourceApp: String = "SMS" // SMS, WhatsApp, Gmail, RCS
+    ): FraudAnalysisResult {
 
         val text = message.lowercase(Locale.getDefault())
-        val senderText = sender.orEmpty().trim()
+        val normalizedSender = sender?.trim().orEmpty()
 
         var score = 0
         val reasons = mutableListOf<String>()
         val safeSignals = mutableListOf<String>()
 
-        // -----------------------
-        // Trust / slight negative scoring
-        // -----------------------
+        // ---------------------------
+        // 1) TRUST / SAFE REDUCTIONS
+        // ---------------------------
         if (isSavedContact) {
-            score -= 18
-            safeSignals.add("Sender exists in contacts")
+            score -= 20
+            safeSignals.add("Saved contact")
         }
 
-        parseDltSuffix(senderText)?.let { suffix ->
+        if (hasRecentConversation) {
+            score -= 8
+            safeSignals.add("Recent conversation exists")
+        }
+
+        if (isFrequentlyContacted) {
+            score -= 7
+            safeSignals.add("Frequently contacted sender")
+        }
+
+        parseDltSuffix(normalizedSender)?.let { suffix ->
             when (suffix) {
                 'G' -> {
-                    score -= 16
-                    safeSignals.add("Government sender category")
+                    score -= 18
+                    safeSignals.add("Government-category sender")
                 }
                 'T' -> {
-                    score -= 12
-                    safeSignals.add("Transactional sender category")
+                    score -= 14
+                    safeSignals.add("Transactional-category sender")
                 }
                 'S' -> {
-                    score -= 5
-                    safeSignals.add("Service sender category")
+                    score -= 6
+                    safeSignals.add("Service-category sender")
                 }
                 'P' -> {
-                    score += 10
-                    reasons.add("Promotional sender category")
+                    score += 12
+                    reasons.add("Promotional-category sender")
                 }
             }
         }
 
-        // -----------------------
-        // Safe words (capped reduction)
-        // -----------------------
+        // ---------------------------
+        // 2) SAFE WORDS
+        // ---------------------------
         var safeReduction = 0
         for (word in safeWords) {
             if (text.contains(word)) {
                 safeReduction += 2
             }
         }
-        safeReduction = min(safeReduction, 6)
+        safeReduction = min(safeReduction, 10)
         if (safeReduction > 0) {
             score -= safeReduction
-            safeSignals.add("Contains transactional / safe-context words")
+            safeSignals.add("Transactional / financial safe-context words")
         }
 
-        // -----------------------
-        // Suspicious words
-        // -----------------------
+        // ---------------------------
+        // 3) SUSPICIOUS WORDS
+        // ---------------------------
         var suspiciousAdd = 0
         for (word in suspiciousWords) {
             if (text.contains(word)) {
@@ -156,12 +173,12 @@ object FraudDetector {
         suspiciousAdd = min(suspiciousAdd, 24)
         if (suspiciousAdd > 0) {
             score += suspiciousAdd
-            reasons.add("Message contains urgency or pressure language")
+            reasons.add("Suspicious keywords detected")
         }
 
-        // -----------------------
-        // Tone / content
-        // -----------------------
+        // ---------------------------
+        // 4) BASIC TONE / PATTERN
+        // ---------------------------
         val hasUrgency = containsAny(
             text,
             listOf("urgent", "immediately", "act now", "today", "within 24 hours", "final notice")
@@ -170,32 +187,13 @@ object FraudDetector {
             score += 8
             reasons.add("Urgent tone detected")
         }
+
         val hasThreat = containsAny(
             text,
-            listOf(
-                "blocked",
-                "suspended",
-                "penalty",
-                "legal action",
-                "deactivated",
-                "restricted",
-                "account suspension",
-                "account blocked",
-                "account suspended"
-            )
+            listOf("blocked", "suspended", "penalty", "legal action", "deactivated", "restricted")
         )
-
-        val kycScamPattern = containsAny(
-            text,
-            listOf("kyc pending", "update kyc", "kyc expired", "kyc suspended")
-        )
-
-        if (kycScamPattern) {
-            score += 20
-            reasons.add("KYC scam pattern detected")
-        }
         if (hasThreat) {
-            score += 18
+            score += 12
             reasons.add("Threat / fear language detected")
         }
 
@@ -214,7 +212,7 @@ object FraudDetector {
         )
         if (asksClick) {
             score += 12
-            reasons.add("Asks user to click or open link")
+            reasons.add("Asks user to open / click a link")
         }
 
         val asksCall = containsAny(
@@ -222,13 +220,8 @@ object FraudDetector {
             listOf("call now", "contact immediately", "call customer care", "call helpline")
         )
         if (asksCall) {
-            score += 18
+            score += 10
             reasons.add("Asks user to call immediately")
-        }
-
-        if (asksCall && hasThreat) {
-            score += 25
-            reasons.add("Call-based scam pattern (threat + call)")
         }
 
         val asksReply = containsAny(
@@ -246,7 +239,7 @@ object FraudDetector {
         )
         if (asksDownload) {
             score += 30
-            reasons.add("App / APK install request detected")
+            reasons.add("Asks to install an app / APK")
         }
 
         val asksSensitiveInfo = containsAny(
@@ -255,7 +248,7 @@ object FraudDetector {
         )
         if (asksSensitiveInfo) {
             score += 45
-            reasons.add("Sensitive information request detected")
+            reasons.add("Requests sensitive information")
         }
 
         val asksRemoteAccess = containsAny(
@@ -264,69 +257,46 @@ object FraudDetector {
         )
         if (asksRemoteAccess) {
             score += 50
-            reasons.add("Remote access request detected")
+            reasons.add("Requests remote access")
         }
 
-        // -----------------------
-        // Links
-        // -----------------------
+        // ---------------------------
+        // 5) LINK ANALYSIS
+        // ---------------------------
         val urls = urlRegex.findAll(text).map { it.value }.toList()
-        val linkCount = urls.size
         val hasLink = urls.isNotEmpty()
-        var officialDomainMatched = false
 
         if (hasLink) {
             score += 10
+            reasons.add("Contains external link")
         } else {
             safeSignals.add("No external link detected")
-
-            if (hasThreat || asksCall || kycScamPattern) {
-                score += 10
-                reasons.add("Suspicious message without link (common scam pattern)")
-            }
         }
 
-        val refundScam = containsAny(
-            text,
-            listOf("refund approved", "income tax refund", "refund processed", "tax refund")
-        )
-
-        if (refundScam) {
-            score += 30
-            reasons.add("Refund scam pattern detected")
-        }
-
-        if (refundScam && hasLink) {
-            score += 25
-            reasons.add("Refund scam with link (high risk)")
-        }
-
-        if (kycScamPattern && hasUrgency) {
-            score += 15
-            reasons.add("High-risk KYC urgency pattern")
-        }
-
-
+        var officialDomainMatched = false
         urls.forEach { url ->
-            val cleanUrl = url.lowercase(Locale.getDefault())
+            val cleaned = url.lowercase(Locale.getDefault())
 
-            if (isShortLink(cleanUrl)) {
+            if (isShortLink(cleaned)) {
                 score += 18
-                reasons.add("Shortened link detected")
+                reasons.add("Shortened / masked link detected")
             }
 
-            if (isRawIpLink(cleanUrl)) {
+            if (isRawIpLink(cleaned)) {
                 score += 25
-                reasons.add("Raw IP link detected")
+                reasons.add("Raw IP address link detected")
             }
 
-            if (hasWeirdHyphenDomain(cleanUrl)) {
+            if (hasWeirdHyphenDomain(cleaned)) {
                 score += 12
                 reasons.add("Suspicious domain format detected")
             }
 
-            if (matchesOfficialDomain(cleanUrl)) {
+            if (matchesOfficialDomain(cleaned)) {
                 officialDomainMatched = true
+            } else if (claimsOfficialBrand(text) && !matchesOfficialDomain(cleaned)) {
+                score += 24
+                reasons.add("Brand/domain mismatch detected")
             }
         }
 
@@ -335,31 +305,26 @@ object FraudDetector {
             safeSignals.add("Official domain matched")
         }
 
-        // -----------------------
-        // Brand / sender mismatch
-        // -----------------------
+        // ---------------------------
+        // 6) SENDER MISMATCH / IMPERSONATION
+        // ---------------------------
         val claimsOfficial = claimsOfficialBrand(text)
-        val senderLooksOfficial = senderLooksOfficial(senderText)
+        val senderLooksOfficial = senderLooksOfficial(normalizedSender)
 
-        if (claimsOfficial && senderText.isNotBlank() && !senderLooksOfficial) {
+        if (claimsOfficial && normalizedSender.isNotBlank() && !senderLooksOfficial) {
             score += 22
             reasons.add("Claims official identity but sender looks unrelated")
         }
 
-        if (claimsOfficial && hasLink && !officialDomainMatched) {
-            score += 20
-            reasons.add("Official impersonation with suspicious link")
-        }
-
-        if (sourceApp.contains("WhatsApp", ignoreCase = true) && !isSavedContact && claimsOfficial) {
+        if (sourceApp.equals("WhatsApp", ignoreCase = true) && !isSavedContact && claimsOfficial) {
             score += 18
             reasons.add("Unknown WhatsApp sender claiming authority")
         }
 
-        // -----------------------
-        // WhatsApp / social scam patterns
-        // -----------------------
-        if (sourceApp.contains("WhatsApp", ignoreCase = true) && !isSavedContact) {
+        // ---------------------------
+        // 7) WHATSAPP / PERSONAL SCAM PATTERNS
+        // ---------------------------
+        if (sourceApp.equals("WhatsApp", ignoreCase = true) && !isSavedContact) {
             score += 10
             reasons.add("Unknown WhatsApp sender")
         }
@@ -369,21 +334,16 @@ object FraudDetector {
             listOf(
                 "send money",
                 "bhej de",
-                "bhejdo",
                 "upi karo",
                 "pay urgently",
                 "transfer urgently",
-                "need money urgently",
-                "paise bhej",
-                "5000 bhej",
-                "jaldi bhej",
-                "urgent paise",
-                "gpay kar",
-                "phonepe kar"
+                "5000 urgently",
+                "need money urgently"
             )
         )
+
         if (asksMoneyUrgently) {
-            score += 35
+            score += 25
             reasons.add("Urgent money request detected")
         }
 
@@ -398,14 +358,10 @@ object FraudDetector {
                 "old sim lost"
             )
         )
+
         if (changedNumberPattern) {
             score += 22
-            reasons.add("Changed number scam pattern detected")
-        }
-
-        if (changedNumberPattern && asksMoneyUrgently) {
-            score += 35
-            reasons.add("High-risk impersonation (number change + money request)")
+            reasons.add("Changed-number scam pattern detected")
         }
 
         if (isSavedContact && asksMoneyUrgently) {
@@ -419,12 +375,12 @@ object FraudDetector {
         )
         if (qrOrCollectPattern) {
             score += 20
-            reasons.add("QR / payment collect scam pattern")
+            reasons.add("Payment collect / QR payment pattern")
         }
 
-        // -----------------------
-        // OTP safe pattern
-        // -----------------------
+        // ---------------------------
+        // 8) OTP SAFETY SPECIAL CASE
+        // ---------------------------
         val containsOtp = text.contains("otp")
         val saysDoNotShare = containsAny(
             text,
@@ -433,28 +389,33 @@ object FraudDetector {
 
         if (containsOtp && saysDoNotShare && !hasLink && !asksReply && !asksCall && !asksSensitiveInfo) {
             score -= 10
-            safeSignals.add("Standard OTP safety format")
+            safeSignals.add("Standard OTP safety message pattern")
         }
 
-        // -----------------------
-        // Combo rules
-        // -----------------------
+        // ---------------------------
+        // 9) COMBO RULES
+        // ---------------------------
         if (hasThreat && hasUrgency && (asksClick || asksCall || asksDownload)) {
-            score += 25
+            score += 15
             reasons.add("Threat + urgency + action combo")
         }
 
         if (hasReward && (asksClick || asksReply || hasLink)) {
             score += 15
-            reasons.add("Reward + claim combo")
+            reasons.add("Reward + claim action combo")
         }
 
-        // -----------------------
-        // Formatting
-        // -----------------------
+        if (claimsOfficial && hasLink && !officialDomainMatched) {
+            score += 20
+            reasons.add("Official impersonation + suspicious link combo")
+        }
+
+        // ---------------------------
+        // 10) FORMATTING HEURISTICS
+        // ---------------------------
         if (looksLikeExcessiveCaps(message)) {
             score += 6
-            reasons.add("Excessive caps pattern")
+            reasons.add("Excessive caps / shouting pattern")
         }
 
         if (hasTooManyPunctuation(message)) {
@@ -462,47 +423,31 @@ object FraudDetector {
             reasons.add("Aggressive punctuation pattern")
         }
 
-        // -----------------------
-        // Clamp final score
-        // -----------------------
+        // ---------------------------
+        // 11) CLAMP SCORE
+        // ---------------------------
         score = max(0, min(score, 100))
 
-        val riskLevel = when {
-            score <= 20 -> "LOW"
-            score <= 45 -> "MEDIUM"
-            score <= 70 -> "MEDIUM"
-            else -> "HIGH"
+        // ---------------------------
+        // 12) LABEL
+        // ---------------------------
+        val label = when {
+            score <= 20 -> FraudLabel.SAFE
+            score <= 40 -> FraudLabel.MOSTLY_SAFE
+            score <= 60 -> FraudLabel.SUSPICIOUS
+            else -> FraudLabel.FRAUD
         }
 
-        val category = when {
-            asksSensitiveInfo || asksRemoteAccess || asksDownload -> "Credential Theft"
-
-            hasReward -> "Prize / Reward Scam"
-
-            asksMoneyUrgently || changedNumberPattern -> "Money Request Scam"
-
-            refundScam -> "Refund Scam"
-
-            kycScamPattern -> "KYC Scam"
-
-            asksCall && hasThreat -> "Call Scam"
-
-            hasThreat && claimsOfficial -> "Impersonation Scam"
-
-            hasLink -> "Suspicious Link"
-
-            else -> "General Analysis"
-        }
-
-        return FraudResult(
+        return FraudAnalysisResult(
             score = score,
-            riskLevel = riskLevel,
-            category = category,
+            label = label,
             reasons = reasons.distinct(),
-            safeSignals = safeSignals.distinct(),
-            mlScore = score / 100f,
-            linkCount = linkCount
+            safeSignals = safeSignals.distinct()
         )
+    }
+
+    private fun containsAny(text: String, phrases: List<String>): Boolean {
+        return phrases.any { text.contains(it) }
     }
 
     private fun parseDltSuffix(sender: String): Char? {
@@ -514,10 +459,6 @@ object FraudDetector {
             upper.endsWith("-P") -> 'P'
             else -> null
         }
-    }
-
-    private fun containsAny(text: String, phrases: List<String>): Boolean {
-        return phrases.any { text.contains(it) }
     }
 
     private fun claimsOfficialBrand(text: String): Boolean {
@@ -537,12 +478,15 @@ object FraudDetector {
             return true
         }
 
-        val onlyAlphaNum = upper.all { it.isLetterOrDigit() || it == '-' || it == ' ' }
-        return sender.length in 5..15 && onlyAlphaNum && sender.any { it.isLetter() }
+        // Example short code / alpha sender ID
+        val onlyAlphaNum = upper.all { it.isLetterOrDigit() || it == '-' }
+        return sender.length in 5..12 && onlyAlphaNum && sender.any { it.isLetter() }
     }
 
     private fun isShortLink(url: String): Boolean {
-        val shorteners = listOf("bit.ly", "tinyurl.com", "rb.gy", "cutt.ly", "goo.gl", "t.co")
+        val shorteners = listOf(
+            "bit.ly", "tinyurl.com", "rb.gy", "cutt.ly", "goo.gl", "t.co"
+        )
         return shorteners.any { url.contains(it) }
     }
 
@@ -564,8 +508,8 @@ object FraudDetector {
     private fun looksLikeExcessiveCaps(message: String): Boolean {
         val letters = message.filter { it.isLetter() }
         if (letters.length < 8) return false
-        val upperCount = letters.count { it.isUpperCase() }
-        return upperCount >= letters.length * 0.7
+        val uppercaseCount = letters.count { it.isUpperCase() }
+        return uppercaseCount >= letters.length * 0.7
     }
 
     private fun hasTooManyPunctuation(message: String): Boolean {

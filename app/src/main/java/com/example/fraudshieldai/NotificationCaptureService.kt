@@ -44,7 +44,8 @@ class NotificationCaptureService : NotificationListenerService() {
                 .orEmpty()
 
             val sourceName = supportedPackages[packageName] ?: packageName
-            val sender = if (title.isNotBlank()) "$sourceName: $title" else sourceName
+            val senderTitle = cleanSender(title)
+            val sender = if (senderTitle.isNotBlank()) senderTitle else sourceName
 
             val messageBody = extractBestMessageBody(
                 text = text,
@@ -64,18 +65,36 @@ class NotificationCaptureService : NotificationListenerService() {
                     lines = textLines
                 )
             }
+            if (visibleContent.isBlank()) return
+
+            if (visibleContent.lowercase().contains("sensitive notification content hidden")) {
+                return
+            }
 
             if (visibleContent.isBlank()) return
             if (isBackgroundNoise(visibleContent)) return
 
-            val signature = "$packageName|$sender|$visibleContent"
+            val normalizedContent = visibleContent
+                .lowercase()
+                .replace(Regex("\\s+"), " ")
+                .trim()
+
+            val signature = "$packageName|$sender|$normalizedContent"
             val now = System.currentTimeMillis()
 
-            if (signature == lastSignature && now - lastTimestamp < 2000) return
+            if (signature == lastSignature && now - lastTimestamp < 4000) return
             lastSignature = signature
             lastTimestamp = now
 
-            val result = FraudDetector.analyzeMessage(visibleContent)
+            val isSaved = ContactTrustHelper.isSavedContact(this, senderTitle)
+
+            val result = FraudDetector.analyzeMessage(
+                sender = senderTitle,
+                message = visibleContent,
+                sourceApp = sourceName,
+                isSavedContact = isSaved
+            )
+
             val currentTime = SimpleDateFormat(
                 "dd MMM yyyy, hh:mm a",
                 Locale.getDefault()
@@ -84,25 +103,26 @@ class NotificationCaptureService : NotificationListenerService() {
             val finalReasons = mutableListOf<String>()
             finalReasons.add("Source: $sourceName notification")
             finalReasons.addAll(result.reasons)
+            finalReasons.addAll(result.safeSignals.map { "Safe signal: $it" })
 
             SmsAnalysisState.updateState(
                 context = this,
-                sender = sender,
+                sender = if (senderTitle.isNotBlank()) "$sourceName: $senderTitle" else sourceName,
                 message = visibleContent,
                 fraudScore = result.score,
                 riskLevel = result.riskLevel,
                 category = result.category,
                 reasons = finalReasons.distinct(),
                 scannedAt = currentTime,
-                mlScore = result.mlScore,
+                mlScore = (result.mlScore * 100).toInt(),
                 linkCount = result.linkCount
             )
 
             if (result.riskLevel == "HIGH" || result.riskLevel == "MEDIUM") {
                 OverlayAlertService.showAlert(
                     context = this,
-                    title = "⚠ Fraud Alert",
-                    message = "$sourceName • ${result.category} • ${result.riskLevel}"
+                    title = if (result.riskLevel == "HIGH") "⚠ Fraud Alert" else "⚠ Suspicious Message",
+                    message = "$sourceName • ${result.category} • Score ${result.score}"
                 )
             }
 
@@ -112,6 +132,8 @@ class NotificationCaptureService : NotificationListenerService() {
             Log.d("NotificationCapture", "Fraud Score: ${result.score}")
             Log.d("NotificationCapture", "Risk Level: ${result.riskLevel}")
             Log.d("NotificationCapture", "Category: ${result.category}")
+            Log.d("NotificationCapture", "Reasons: ${result.reasons}")
+            Log.d("NotificationCapture", "Safe Signals: ${result.safeSignals}")
 
         } catch (e: Exception) {
             Log.e("NotificationCapture", "Error reading notification: ${e.message}", e)
@@ -184,6 +206,12 @@ class NotificationCaptureService : NotificationListenerService() {
         }.trim()
     }
 
+    private fun cleanSender(rawSender: String): String {
+        return rawSender
+            .replace(Regex("\\s+"), " ")
+            .trim()
+    }
+
     private fun isBackgroundNoise(content: String): Boolean {
         val lower = content.lowercase()
 
@@ -196,7 +224,8 @@ class NotificationCaptureService : NotificationListenerService() {
             "tap to turn off usb",
             "usb debugging on",
             "charging this device via usb",
-            "android system"
+            "android system",
+            "sensitive notification content hidden",
         )
 
         return blockedPhrases.any { lower.contains(it) }

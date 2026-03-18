@@ -12,6 +12,11 @@ import java.util.Locale
 
 class SmsReceiver : BroadcastReceiver() {
 
+    companion object {
+        private var lastSmsSignature: String = ""
+        private var lastSmsTimestamp: Long = 0L
+    }
+
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != "android.provider.Telephony.SMS_RECEIVED") return
 
@@ -42,7 +47,21 @@ class SmsReceiver : BroadcastReceiver() {
                 }
             }.trim()
 
-            val result = FraudDetector.analyzeMessage(fullMessage)
+            if (fullMessage.isBlank()) return
+
+            val signature = "$sender|$fullMessage"
+            val now = System.currentTimeMillis()
+
+            if (signature == lastSmsSignature && now - lastSmsTimestamp < 2000) return
+            lastSmsSignature = signature
+            lastSmsTimestamp = now
+
+            val result = FraudDetector.analyzeMessage(
+                sender = sender,
+                message = fullMessage,
+                sourceApp = "SMS",
+                isSavedContact = false
+            )
 
             val currentTime = SimpleDateFormat(
                 "dd MMM yyyy, hh:mm a",
@@ -56,9 +75,9 @@ class SmsReceiver : BroadcastReceiver() {
                 fraudScore = result.score,
                 riskLevel = result.riskLevel,
                 category = result.category,
-                reasons = result.reasons,
+                reasons = listOf("Source: SMS") + result.reasons,
                 scannedAt = currentTime,
-                mlScore = result.mlScore,
+                mlScore = (result.mlScore * 100).toInt(),
                 linkCount = result.linkCount
             )
 
