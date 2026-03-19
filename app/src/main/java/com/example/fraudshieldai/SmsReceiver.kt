@@ -62,7 +62,8 @@ class SmsReceiver : BroadcastReceiver() {
             lastSmsTimestamp = now
 
             val mlScore = try {
-                TinyMlScorer.predictScore(fullMessage)
+                val scorer = TinyMlScorer(context)
+                scorer.predictScore(fullMessage)
             } catch (e: Exception) {
                 Log.w("SmsReceiver", "ML scorer failed: ${e.message}")
                 0f

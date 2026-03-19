@@ -85,6 +85,22 @@ class MainActivity : ComponentActivity() {
         NotificationHelper.createNotificationChannel(this)
         SmsAnalysisState.initialize(this)
 
+        val scorer = TinyMlScorer(this)
+
+        val tests = listOf(
+            "Your KYC is suspended. Click now to verify.",
+            "Share OTP immediately to avoid account block.",
+            "Download AnyDesk for bank verification.",
+            "Your Swiggy order has been delivered.",
+            "Meeting at 3 PM in seminar hall.",
+            "UPI payment of Rs 250 successful."
+        )
+
+        for (msg in tests) {
+            val score = scorer.predictScore(msg)
+            android.util.Log.d("ML_TEST", "\"$msg\" => $score")
+        }
+
         setContent {
             FraudShieldApp()
         }

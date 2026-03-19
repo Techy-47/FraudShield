@@ -85,7 +85,8 @@ class NotificationCaptureService : NotificationListenerService() {
             val isSaved = ContactTrustHelper.isSavedContact(this, senderTitle)
 
             val mlScore = try {
-                TinyMlScorer.predictScore(visibleContent)
+                val scorer = TinyMlScorer(this)
+                scorer.predictScore(visibleContent)
             } catch (e: Exception) {
                 Log.w("NotificationCapture", "ML scorer failed: ${e.message}")
                 0f

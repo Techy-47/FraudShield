@@ -180,10 +180,12 @@ object FraudDetector {
             reasons.add("Threat / fear language detected")
         }
 
-        val kycScamPattern = containsAny(
-            text,
-            listOf("kyc pending", "update kyc", "kyc expired", "kyc suspended")
-        )
+        val kycScamPattern =
+            text.contains("kyc") && containsAny(
+                text,
+                listOf("suspended", "blocked", "expired", "pending", "verify", "update")
+            )
+
         if (kycScamPattern) {
             score += 20
             reasons.add("KYC scam pattern detected")
@@ -458,18 +460,44 @@ object FraudDetector {
             reasons.add("Aggressive punctuation pattern")
         }
 
-        // -----------------------
-        // Optional ML contribution
-        // -----------------------
-        if (mlScoreInput >= 0.85f) {
-            score += 25
+// -----------------------
+// Optional ML contribution
+// -----------------------
+        if (mlScoreInput >= 0.55f) {
+            score += 20
             reasons.add("ML model marked message as highly suspicious")
-        } else if (mlScoreInput >= 0.65f) {
-            score += 15
+        } else if (mlScoreInput >= 0.45f) {
+            score += 12
             reasons.add("ML model marked message as suspicious")
-        } else if (mlScoreInput <= 0.20f) {
-            score -= 8
+        } else if (mlScoreInput >= 0.35f) {
+            score += 6
+            reasons.add("ML model found mild scam-like language")
+        } else if (mlScoreInput <= 0.18f) {
+            score -= 6
             safeSignals.add("ML model indicates low scam probability")
+        }
+
+        if (mlScoreInput >= 0.35f && (
+                    hasThreat ||
+                            kycScamPattern ||
+                            utilityScamPattern ||
+                            asksSensitiveInfo ||
+                            asksRemoteAccess ||
+                            asksMoneyUrgently ||
+                            linkScan.maliciousLinks.isNotEmpty()
+                    )
+        ) {
+            score += 8
+            reasons.add("ML suspicion supports rule-based fraud indicators")
+        }
+
+        if (mlScoreInput >= 0.40f && score >= 40) {
+            score += 10
+            reasons.add("ML reinforces strong scam indicators")
+        }
+
+        if (mlScoreInput <= 0.30f && safeSignals.isNotEmpty()) {
+            score -= 5
         }
 
         // -----------------------
@@ -486,12 +514,12 @@ object FraudDetector {
 
         val category = when {
             asksSensitiveInfo || asksRemoteAccess || asksDownload -> "Credential Theft"
+            kycScamPattern -> "KYC Scam"
             linkScan.maliciousLinks.isNotEmpty() -> "Malicious Link"
             utilityScamPattern -> "Utility Bill Scam"
             hasReward -> "Prize / Reward Scam"
             asksMoneyUrgently || changedNumberPattern -> "Money Request Scam"
             refundScam -> "Refund Scam"
-            kycScamPattern -> "KYC Scam"
             asksCall && hasThreat -> "Call Scam"
             hasThreat && claimsOfficial -> "Impersonation Scam"
             hasLink -> "Suspicious Link"

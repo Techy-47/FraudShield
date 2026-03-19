@@ -1,71 +1,43 @@
 package com.example.fraudshieldai
 
-object TinyMlScorer {
+import android.content.Context
+import org.tensorflow.lite.Interpreter
+import java.nio.MappedByteBuffer
+import java.nio.channels.FileChannel
 
-    private val weightedFeatures = mapOf(
-        "urgent" to 8,
-        "immediately" to 8,
-        "otp" to 10,
-        "kyc" to 12,
-        "bank" to 8,
-        "electricity" to 8,
-        "bill" to 6,
-        "lottery" to 12,
-        "winner" to 12,
-        "click" to 8,
-        "verify" to 8,
-        "suspended" to 10,
-        "account" to 6,
-        "loan" to 8,
-        ".xyz" to 14,
-        "http://" to 10,
-        "https://" to 10,
-        "refund" to 10,
-        "reward" to 10,
-        "claim now" to 12,
-        "update kyc" to 14,
-        "blocked" to 10,
-        "legal action" to 12,
-        "call now" to 10,
-        "share otp" to 18,
-        "anydesk" to 20,
-        "teamviewer" to 20,
-        "remote access" to 20,
-        "scan qr" to 12,
-        "collect request" to 14,
-        "new number" to 10,
-        "send money" to 14
-    )
+class TinyMlScorer(context: Context) {
 
-    fun score(message: String): Int {
-        val lower = message.lowercase()
-        var score = 0
+    private val interpreter: Interpreter by lazy {
+        Interpreter(loadModelFile(context))
+    }
 
-        weightedFeatures.forEach { (feature, weight) ->
-            if (lower.contains(feature)) score += weight
-        }
+    private val preprocessor = TextPreprocessor(context)
 
-        if (Regex("""(https?://|www\.)""").containsMatchIn(lower)) {
-            score += 6
-        }
-
-        if (Regex("""\b\d{1,3}(\.\d{1,3}){3}\b""").containsMatchIn(lower)) {
-            score += 12
-        }
-
-        return score.coerceAtMost(100)
+    private fun loadModelFile(context: Context): MappedByteBuffer {
+        val fileDescriptor = context.assets.openFd("fraud_model.tflite")
+        val inputStream = fileDescriptor.createInputStream()
+        val fileChannel = inputStream.channel
+        val startOffset = fileDescriptor.startOffset
+        val declaredLength = fileDescriptor.declaredLength
+        return fileChannel.map(FileChannel.MapMode.READ_ONLY, startOffset, declaredLength)
     }
 
     fun predictScore(message: String): Float {
-        val rawScore = score(message)
+        val inputSequence = preprocessor.preprocess(message)
 
-        return when {
-            rawScore >= 80 -> 0.95f
-            rawScore >= 65 -> 0.85f
-            rawScore >= 50 -> 0.72f
-            rawScore >= 35 -> 0.58f
-            rawScore >= 20 -> 0.38f
-            else -> 0.12f
-        }
+        val input = arrayOf(inputSequence)
+        val output = Array(1) { FloatArray(1) }
+
+        interpreter.run(input, output)
+
+        return output[0][0].coerceIn(0f, 1f)
+    }
+
+    fun score(message: String): Int {
+        return (predictScore(message) * 100).toInt().coerceIn(0, 100)
+    }
+
+    fun close() {
+        interpreter.close()
     }
 }
