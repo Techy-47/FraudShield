@@ -22,10 +22,20 @@ object SmsStorage {
                 put("scannedAt", item.scannedAt)
                 put("mlScore", item.mlScore)
                 put("linkCount", item.linkCount)
+                put("hasBlockedLinks", item.hasBlockedLinks)
+                put("isSanitized", item.isSanitized)
 
                 val reasonsArray = JSONArray()
                 item.reasons.forEach { reasonsArray.put(it) }
                 put("reasons", reasonsArray)
+
+                val suspiciousLinksArray = JSONArray()
+                item.suspiciousLinks.forEach { suspiciousLinksArray.put(it) }
+                put("suspiciousLinks", suspiciousLinksArray)
+
+                val maliciousLinksArray = JSONArray()
+                item.maliciousLinks.forEach { maliciousLinksArray.put(it) }
+                put("maliciousLinks", maliciousLinksArray)
             }
             jsonArray.put(obj)
         }
@@ -52,6 +62,18 @@ object SmsStorage {
                         reasons.add(reasonsJson.optString(j))
                     }
 
+                    val suspiciousLinksJson = obj.optJSONArray("suspiciousLinks") ?: JSONArray()
+                    val suspiciousLinks = mutableListOf<String>()
+                    for (j in 0 until suspiciousLinksJson.length()) {
+                        suspiciousLinks.add(suspiciousLinksJson.optString(j))
+                    }
+
+                    val maliciousLinksJson = obj.optJSONArray("maliciousLinks") ?: JSONArray()
+                    val maliciousLinks = mutableListOf<String>()
+                    for (j in 0 until maliciousLinksJson.length()) {
+                        maliciousLinks.add(maliciousLinksJson.optString(j))
+                    }
+
                     add(
                         SmsHistoryItem(
                             sender = obj.optString("sender"),
@@ -62,7 +84,11 @@ object SmsStorage {
                             reasons = reasons,
                             scannedAt = obj.optString("scannedAt"),
                             mlScore = obj.optInt("mlScore"),
-                            linkCount = obj.optInt("linkCount")
+                            linkCount = obj.optInt("linkCount"),
+                            hasBlockedLinks = obj.optBoolean("hasBlockedLinks", false),
+                            suspiciousLinks = suspiciousLinks,
+                            maliciousLinks = maliciousLinks,
+                            isSanitized = obj.optBoolean("isSanitized", false)
                         )
                     )
                 }

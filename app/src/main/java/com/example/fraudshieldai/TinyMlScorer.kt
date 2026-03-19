@@ -19,7 +19,22 @@ object TinyMlScorer {
         "loan" to 8,
         ".xyz" to 14,
         "http://" to 10,
-        "https://" to 10
+        "https://" to 10,
+        "refund" to 10,
+        "reward" to 10,
+        "claim now" to 12,
+        "update kyc" to 14,
+        "blocked" to 10,
+        "legal action" to 12,
+        "call now" to 10,
+        "share otp" to 18,
+        "anydesk" to 20,
+        "teamviewer" to 20,
+        "remote access" to 20,
+        "scan qr" to 12,
+        "collect request" to 14,
+        "new number" to 10,
+        "send money" to 14
     )
 
     fun score(message: String): Int {
@@ -30,6 +45,27 @@ object TinyMlScorer {
             if (lower.contains(feature)) score += weight
         }
 
-        return score.coerceAtMost(30)
+        if (Regex("""(https?://|www\.)""").containsMatchIn(lower)) {
+            score += 6
+        }
+
+        if (Regex("""\b\d{1,3}(\.\d{1,3}){3}\b""").containsMatchIn(lower)) {
+            score += 12
+        }
+
+        return score.coerceAtMost(100)
+    }
+
+    fun predictScore(message: String): Float {
+        val rawScore = score(message)
+
+        return when {
+            rawScore >= 80 -> 0.95f
+            rawScore >= 65 -> 0.85f
+            rawScore >= 50 -> 0.72f
+            rawScore >= 35 -> 0.58f
+            rawScore >= 20 -> 0.38f
+            else -> 0.12f
+        }
     }
 }

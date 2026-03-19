@@ -16,8 +16,8 @@ import android.provider.Settings
 import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
-import android.view.WindowInsets
 import android.view.WindowManager
+import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
 
@@ -27,8 +27,7 @@ class OverlayAlertService : Service() {
     private var overlayView: LinearLayout? = null
 
     private val handler = Handler(Looper.getMainLooper())
-    private var showRunnable: Runnable? = null
-    private var hideRunnable: Runnable? = null
+    private var autoHideRunnable: Runnable? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (!Settings.canDrawOverlays(this)) {
@@ -38,68 +37,118 @@ class OverlayAlertService : Service() {
 
         val title = intent?.getStringExtra(EXTRA_TITLE) ?: "⚠ Fraud Alert"
         val message = intent?.getStringExtra(EXTRA_MESSAGE) ?: "Suspicious content detected"
+        val riskLevel = intent?.getStringExtra(EXTRA_RISK_LEVEL) ?: "HIGH"
+        val blockedLink = intent?.getBooleanExtra(EXTRA_BLOCKED_LINK, false) ?: false
 
-        cancelPendingTasks()
         removeOverlay()
+        showCenteredPopup(title, message, riskLevel, blockedLink)
 
-        showRunnable = Runnable {
-            try {
-                showOverlay(title, message)
-            } catch (e: Exception) {
-                Log.e("OverlayAlertService", "Failed to show overlay", e)
-                stopSelf()
-            }
-        }
-
-        handler.postDelayed(showRunnable!!, 3000) // 3 second delay
         return START_NOT_STICKY
     }
 
-    private fun showOverlay(title: String, message: String) {
+    private fun showCenteredPopup(
+        title: String,
+        message: String,
+        riskLevel: String,
+        blockedLink: Boolean
+    ) {
         if (!Settings.canDrawOverlays(this)) {
             stopSelf()
             return
         }
 
-        if (overlayView != null) {
-            removeOverlay()
-        }
-
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
-        val topInset = getStatusBarHeight()
+
+        val backgroundColor = when {
+            blockedLink -> "#991B1B"
+            riskLevel == "CRITICAL" -> "#7F1D1D"
+            riskLevel == "HIGH" -> "#B91C1C"
+            riskLevel == "MEDIUM" -> "#B45309"
+            else -> "#1E3A8A"
+        }
 
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(16), dp(20), dp(18))
+            setPadding(dp(20), dp(20), dp(20), dp(18))
             background = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
-                setColor(Color.parseColor("#D92D20"))
-                cornerRadii = floatArrayOf(
-                    0f, 0f,
-                    0f, 0f,
-                    dpF(22), dpF(22),
-                    dpF(22), dpF(22)
-                )
+                cornerRadius = dpF(24)
+                setColor(Color.parseColor("#FFFFFF"))
+                setStroke(dp(2), Color.parseColor(backgroundColor))
             }
-            elevation = dpF(10)
+            elevation = dpF(16)
         }
 
         val titleView = TextView(this).apply {
             text = title
-            setTextColor(Color.WHITE)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
+            setTextColor(Color.parseColor(backgroundColor))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
             setTypeface(typeface, Typeface.BOLD)
+        }
+
+        val subtitleView = TextView(this).apply {
+            text = if (blockedLink) {
+                "Protection applied locally"
+            } else {
+                "Latest scanned message needs attention"
+            }
+            setTextColor(Color.parseColor("#475569"))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            setPadding(0, dp(6), 0, 0)
         }
 
         val messageView = TextView(this).apply {
             text = message
-            setTextColor(Color.WHITE)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
-            setPadding(0, dp(6), 0, 0)
+            setTextColor(Color.parseColor("#0F172A"))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+            setPadding(0, dp(14), 0, 0)
         }
 
+        val buttonRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.END
+            setPadding(0, dp(18), 0, 0)
+        }
+
+        val ignoreButton = Button(this).apply {
+            text = "Ignore"
+            isAllCaps = false
+            setTextColor(Color.parseColor("#0F172A"))
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = dpF(14)
+                setColor(Color.parseColor("#E2E8F0"))
+            }
+            setOnClickListener {
+                removeOverlay()
+                stopSelf()
+            }
+        }
+
+        val actionButton = Button(this).apply {
+            text = "Action"
+            isAllCaps = false
+            setTextColor(Color.WHITE)
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = dpF(14)
+                setColor(Color.parseColor(backgroundColor))
+            }
+            setOnClickListener {
+                openAppToAnalysis()
+                removeOverlay()
+                stopSelf()
+            }
+        }
+
+        buttonRow.addView(ignoreButton)
+        buttonRow.addView(spaceView(dp(10)))
+        buttonRow.addView(actionButton)
+
         container.addView(titleView)
+        container.addView(subtitleView)
         container.addView(messageView)
+        container.addView(buttonRow)
 
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
@@ -110,17 +159,15 @@ class OverlayAlertService : Service() {
                 @Suppress("DEPRECATION")
                 WindowManager.LayoutParams.TYPE_PHONE,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT
         ).apply {
-            gravity = Gravity.TOP
-            x = 0
-            y = topInset + dp(70)
+            gravity = Gravity.CENTER
+            width = (resources.displayMetrics.widthPixels * 0.88f).toInt()
         }
 
         overlayView = container
+
         try {
             windowManager?.addView(overlayView, params)
         } catch (e: Exception) {
@@ -130,28 +177,29 @@ class OverlayAlertService : Service() {
             return
         }
 
-        hideRunnable = Runnable {
+        autoHideRunnable = Runnable {
             removeOverlay()
             stopSelf()
         }
-
-        handler.postDelayed(hideRunnable!!, 6500) // visible for 6.5 sec
+        handler.postDelayed(autoHideRunnable!!, 10000)
     }
 
-    private fun getStatusBarHeight(): Int {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            val wm = getSystemService(WINDOW_SERVICE) as WindowManager
-            val insets = wm.currentWindowMetrics.windowInsets
-            insets.getInsets(WindowInsets.Type.statusBars()).top
-        } else {
-            @Suppress("DEPRECATION")
-            resources.getIdentifier("status_bar_height", "dimen", "android")
-                .takeIf { it > 0 }
-                ?.let { resources.getDimensionPixelSize(it) } ?: dp(24)
+    private fun openAppToAnalysis() {
+        val intent = Intent(this, MainActivity::class.java).apply {
+            addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                        Intent.FLAG_ACTIVITY_SINGLE_TOP
+            )
+            putExtra("open_analysis_tab", true)
         }
+        startActivity(intent)
     }
 
     private fun removeOverlay() {
+        autoHideRunnable?.let { handler.removeCallbacks(it) }
+        autoHideRunnable = null
+
         overlayView?.let { view ->
             try {
                 windowManager?.removeView(view)
@@ -159,13 +207,6 @@ class OverlayAlertService : Service() {
             }
             overlayView = null
         }
-    }
-
-    private fun cancelPendingTasks() {
-        showRunnable?.let { handler.removeCallbacks(it) }
-        hideRunnable?.let { handler.removeCallbacks(it) }
-        showRunnable = null
-        hideRunnable = null
     }
 
     private fun dp(value: Int): Int {
@@ -184,8 +225,13 @@ class OverlayAlertService : Service() {
         )
     }
 
+    private fun spaceView(width: Int): TextView {
+        return TextView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(width, 1)
+        }
+    }
+
     override fun onDestroy() {
-        cancelPendingTasks()
         removeOverlay()
         super.onDestroy()
     }
@@ -195,13 +241,23 @@ class OverlayAlertService : Service() {
     companion object {
         private const val EXTRA_TITLE = "extra_title"
         private const val EXTRA_MESSAGE = "extra_message"
+        private const val EXTRA_RISK_LEVEL = "extra_risk_level"
+        private const val EXTRA_BLOCKED_LINK = "extra_blocked_link"
 
-        fun showAlert(context: Context, title: String, message: String) {
+        fun showAlert(
+            context: Context,
+            title: String,
+            message: String,
+            riskLevel: String = "HIGH",
+            blockedLink: Boolean = false
+        ) {
             if (!Settings.canDrawOverlays(context)) return
 
             val intent = Intent(context, OverlayAlertService::class.java).apply {
                 putExtra(EXTRA_TITLE, title)
                 putExtra(EXTRA_MESSAGE, message)
+                putExtra(EXTRA_RISK_LEVEL, riskLevel)
+                putExtra(EXTRA_BLOCKED_LINK, blockedLink)
             }
 
             try {

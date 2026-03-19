@@ -65,13 +65,9 @@ class NotificationCaptureService : NotificationListenerService() {
                     lines = textLines
                 )
             }
-            if (visibleContent.isBlank()) return
-
-            if (visibleContent.lowercase().contains("sensitive notification content hidden")) {
-                return
-            }
 
             if (visibleContent.isBlank()) return
+            if (visibleContent.lowercase().contains("sensitive notification content hidden")) return
             if (isBackgroundNoise(visibleContent)) return
 
             val normalizedContent = visibleContent
@@ -88,11 +84,19 @@ class NotificationCaptureService : NotificationListenerService() {
 
             val isSaved = ContactTrustHelper.isSavedContact(this, senderTitle)
 
+            val mlScore = try {
+                TinyMlScorer.predictScore(visibleContent)
+            } catch (e: Exception) {
+                Log.w("NotificationCapture", "ML scorer failed: ${e.message}")
+                0f
+            }
+
             val result = FraudDetector.analyzeMessage(
                 sender = senderTitle,
                 message = visibleContent,
                 sourceApp = sourceName,
-                isSavedContact = isSaved
+                isSavedContact = isSaved,
+                mlScoreInput = mlScore
             )
 
             val currentTime = SimpleDateFormat(
@@ -102,42 +106,84 @@ class NotificationCaptureService : NotificationListenerService() {
 
             val finalReasons = mutableListOf<String>()
             finalReasons.add("Source: $sourceName notification")
+            if (result.hasBlockedLinks) {
+                finalReasons.add("Protection: Malicious link blocked and sanitized")
+            }
             finalReasons.addAll(result.reasons)
             finalReasons.addAll(result.safeSignals.map { "Safe signal: $it" })
+
+            val displayMessage = if (result.hasBlockedLinks) {
+                result.sanitizedMessage
+            } else {
+                visibleContent
+            }
 
             SmsAnalysisState.updateState(
                 context = this,
                 sender = if (senderTitle.isNotBlank()) "$sourceName: $senderTitle" else sourceName,
-                message = visibleContent,
+                message = displayMessage,
                 fraudScore = result.score,
                 riskLevel = result.riskLevel,
                 category = result.category,
                 reasons = finalReasons.distinct(),
                 scannedAt = currentTime,
                 mlScore = (result.mlScore * 100).toInt(),
-                linkCount = result.linkCount
+                linkCount = result.linkCount,
+                hasBlockedLinks = result.hasBlockedLinks,
+                suspiciousLinks = result.suspiciousLinks,
+                maliciousLinks = result.maliciousLinks,
+                isSanitized = result.hasBlockedLinks
             )
 
-            if (result.riskLevel == "HIGH" || result.riskLevel == "MEDIUM") {
+            if (shouldShowOverlay(result.riskLevel, result.hasBlockedLinks)) {
+                val alertTitle = when {
+                    result.hasBlockedLinks -> "🚫 Malicious Link Blocked"
+                    result.riskLevel == "CRITICAL" -> "🚨 Critical Fraud Alert"
+                    result.riskLevel == "HIGH" -> "⚠ Fraud Alert"
+                    else -> "⚠ Suspicious Message"
+                }
+
+                val alertMessage = when {
+                    result.hasBlockedLinks ->
+                        "$sourceName • ${result.category} • Unsafe link neutralized"
+
+                    result.riskLevel == "CRITICAL" ->
+                        "$sourceName • ${result.category} • Score ${result.score}"
+
+                    else ->
+                        "$sourceName • ${result.category} • Score ${result.score}"
+                }
+
                 OverlayAlertService.showAlert(
                     context = this,
-                    title = if (result.riskLevel == "HIGH") "⚠ Fraud Alert" else "⚠ Suspicious Message",
-                    message = "$sourceName • ${result.category} • Score ${result.score}"
+                    title = alertTitle,
+                    message = alertMessage,
+                    riskLevel = result.riskLevel,
+                    blockedLink = result.hasBlockedLinks
                 )
             }
 
             Log.d("NotificationCapture", "Package: $packageName")
             Log.d("NotificationCapture", "Sender: $sender")
             Log.d("NotificationCapture", "Visible content: $visibleContent")
+            Log.d("NotificationCapture", "Sanitized content: ${result.sanitizedMessage}")
             Log.d("NotificationCapture", "Fraud Score: ${result.score}")
             Log.d("NotificationCapture", "Risk Level: ${result.riskLevel}")
             Log.d("NotificationCapture", "Category: ${result.category}")
+            Log.d("NotificationCapture", "Blocked Links: ${result.hasBlockedLinks}")
+            Log.d("NotificationCapture", "Malicious Links: ${result.maliciousLinks}")
+            Log.d("NotificationCapture", "Suspicious Links: ${result.suspiciousLinks}")
             Log.d("NotificationCapture", "Reasons: ${result.reasons}")
             Log.d("NotificationCapture", "Safe Signals: ${result.safeSignals}")
 
         } catch (e: Exception) {
             Log.e("NotificationCapture", "Error reading notification: ${e.message}", e)
         }
+    }
+
+    private fun shouldShowOverlay(riskLevel: String, hasBlockedLinks: Boolean): Boolean {
+        if (hasBlockedLinks) return true
+        return riskLevel == "MEDIUM" || riskLevel == "HIGH" || riskLevel == "CRITICAL"
     }
 
     private fun shouldIgnoreNotification(sbn: StatusBarNotification): Boolean {
@@ -225,7 +271,7 @@ class NotificationCaptureService : NotificationListenerService() {
             "usb debugging on",
             "charging this device via usb",
             "android system",
-            "sensitive notification content hidden",
+            "sensitive notification content hidden"
         )
 
         return blockedPhrases.any { lower.contains(it) }

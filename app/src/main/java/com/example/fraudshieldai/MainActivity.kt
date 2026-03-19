@@ -95,6 +95,11 @@ class MainActivity : ComponentActivity() {
         requestNotificationPermission()
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+    }
+
     private fun requestSmsPermission() {
         val permissions = arrayOf(
             Manifest.permission.RECEIVE_SMS,
@@ -167,7 +172,12 @@ private fun isNotificationAccessEnabled(context: Context): Boolean {
         val uiState by SmsAnalysisState.uiState.collectAsState()
 
         var protectionState by remember { mutableStateOf(getProtectionState(context)) }
-        var selectedTab by remember { mutableStateOf("Home") }
+        val activity = context as? MainActivity
+        var selectedTab by remember {
+            mutableStateOf(
+                if (activity?.intent?.getBooleanExtra("open_analysis_tab", false) == true) "Home" else "Home"
+            )
+        }
 
         fun refreshProtectionState() {
             protectionState = getProtectionState(context)
@@ -185,7 +195,10 @@ private fun isNotificationAccessEnabled(context: Context): Boolean {
             }
         }
 
+
+
         val riskColor = when (uiState.riskLevel) {
+            "CRITICAL" -> Color(0xFFB00020)
             "HIGH" -> Color(0xFFD32F2F)
             "MEDIUM" -> Color(0xFFF57C00)
             "LOW" -> Color(0xFFFBC02D)
@@ -244,12 +257,37 @@ private fun isNotificationAccessEnabled(context: Context): Boolean {
                                         fontWeight = FontWeight.Bold,
                                         style = MaterialTheme.typography.titleMedium
                                     )
+
                                     Spacer(modifier = Modifier.height(10.dp))
+
                                     Text(
                                         text = "Sender: ${uiState.sender}",
                                         fontWeight = FontWeight.SemiBold
                                     )
+
                                     Spacer(modifier = Modifier.height(8.dp))
+
+                                    if (uiState.isSanitized) {
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .background(
+                                                    color = Color(0xFFE8F5E9),
+                                                    shape = RoundedCornerShape(12.dp)
+                                                )
+                                                .padding(10.dp)
+                                        ) {
+                                            Text(
+                                                text = "Safe display mode active: malicious link content was sanitized locally.",
+                                                color = Color(0xFF1B5E20),
+                                                fontWeight = FontWeight.SemiBold,
+                                                style = MaterialTheme.typography.bodySmall
+                                            )
+                                        }
+
+                                        Spacer(modifier = Modifier.height(10.dp))
+                                    }
+
                                     Text(text = uiState.message)
                                 }
                             }
@@ -266,6 +304,51 @@ private fun isNotificationAccessEnabled(context: Context): Boolean {
                                         style = MaterialTheme.typography.titleMedium,
                                         fontWeight = FontWeight.Bold
                                     )
+
+                                    if (uiState.hasBlockedLinks || uiState.suspiciousLinks.isNotEmpty() || uiState.maliciousLinks.isNotEmpty()) {
+                                        Card(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            colors = CardDefaults.cardColors(containerColor = Color.White),
+                                            shape = RoundedCornerShape(20.dp),
+                                            elevation = CardDefaults.cardElevation(defaultElevation = 6.dp)
+                                        ) {
+                                            Column(modifier = Modifier.padding(16.dp)) {
+                                                Text(
+                                                    text = "Protection Action",
+                                                    style = MaterialTheme.typography.titleMedium,
+                                                    fontWeight = FontWeight.Bold
+                                                )
+
+                                                Spacer(modifier = Modifier.height(12.dp))
+
+                                                if (uiState.hasBlockedLinks) {
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .fillMaxWidth()
+                                                            .background(
+                                                                color = Color(0xFFFFEBEE),
+                                                                shape = RoundedCornerShape(14.dp)
+                                                            )
+                                                            .padding(14.dp)
+                                                    ) {
+                                                        Text(
+                                                            text = "Malicious link neutralized on-device. Unsafe content has been blocked from safe display.",
+                                                            color = Color(0xFFB71C1C),
+                                                            fontWeight = FontWeight.Bold
+                                                        )
+                                                    }
+
+                                                    Spacer(modifier = Modifier.height(10.dp))
+                                                }
+
+                                                Text(text = "Total links detected: ${uiState.linkCount}")
+                                                Spacer(modifier = Modifier.height(4.dp))
+                                                Text(text = "Suspicious links: ${uiState.suspiciousLinks.size}")
+                                                Spacer(modifier = Modifier.height(4.dp))
+                                                Text(text = "Malicious links blocked: ${uiState.maliciousLinks.size}")
+                                            }
+                                        }
+                                    }
 
                                     Spacer(modifier = Modifier.height(12.dp))
 
@@ -337,7 +420,12 @@ private fun isNotificationAccessEnabled(context: Context): Boolean {
                                             )
                                             Spacer(modifier = Modifier.height(4.dp))
                                             Text(
-                                                text = "ML Score: ${uiState.mlScore} | Links: ${uiState.linkCount}",
+                                                text = "ML Score: ${uiState.mlScore}",
+                                                color = Color.White
+                                            )
+                                            Spacer(modifier = Modifier.height(4.dp))
+                                            Text(
+                                                text = "Links: ${uiState.linkCount} | Suspicious: ${uiState.suspiciousLinks.size} | Blocked: ${uiState.maliciousLinks.size}",
                                                 color = Color.White
                                             )
                                         }
@@ -708,6 +796,7 @@ fun HistorySection(history: List<SmsHistoryItem>) {
 @Composable
 fun HistoryItemCard(item: SmsHistoryItem) {
     val riskColor = when (item.riskLevel) {
+        "CRITICAL" -> Color(0xFFB00020)
         "HIGH" -> Color(0xFFD32F2F)
         "MEDIUM" -> Color(0xFFF57C00)
         "LOW" -> Color(0xFFFBC02D)
@@ -725,16 +814,43 @@ fun HistoryItemCard(item: SmsHistoryItem) {
                 color = riskColor,
                 fontWeight = FontWeight.Bold
             )
+
             Spacer(modifier = Modifier.height(6.dp))
             Text(text = "Sender: ${item.sender}")
+
             Spacer(modifier = Modifier.height(4.dp))
             Text(text = "Risk: ${item.riskLevel} | Score: ${item.fraudScore}")
+
             Spacer(modifier = Modifier.height(4.dp))
-            Text(text = "ML Score: ${item.mlScore} | Links: ${item.linkCount}")
+            Text(
+                text = "ML Score: ${item.mlScore} | Links: ${item.linkCount} | Suspicious: ${item.suspiciousLinks.size} | Blocked: ${item.maliciousLinks.size}"
+            )
+
             Spacer(modifier = Modifier.height(4.dp))
             Text(text = "Time: ${item.scannedAt}")
+
+            if (item.hasBlockedLinks || item.isSanitized) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(
+                            color = Color.White.copy(alpha = 0.65f),
+                            shape = RoundedCornerShape(10.dp)
+                        )
+                        .padding(8.dp)
+                ) {
+                    Text(
+                        text = "Protection applied: malicious link content sanitized locally",
+                        color = riskColor,
+                        fontWeight = FontWeight.SemiBold,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
+
             Spacer(modifier = Modifier.height(6.dp))
-            Text(text = item.message.take(100) + if (item.message.length > 100) "..." else "")
+            Text(text = item.message.take(120) + if (item.message.length > 120) "..." else "")
         }
     }
 }

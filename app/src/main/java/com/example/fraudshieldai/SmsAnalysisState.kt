@@ -13,7 +13,11 @@ data class SmsHistoryItem(
     val reasons: List<String>,
     val scannedAt: String,
     val mlScore: Int,
-    val linkCount: Int
+    val linkCount: Int,
+    val hasBlockedLinks: Boolean = false,
+    val suspiciousLinks: List<String> = emptyList(),
+    val maliciousLinks: List<String> = emptyList(),
+    val isSanitized: Boolean = false
 )
 
 data class SmsAnalysisUiState(
@@ -26,7 +30,11 @@ data class SmsAnalysisUiState(
     val scannedAt: String = "--",
     val history: List<SmsHistoryItem> = emptyList(),
     val mlScore: Int = 0,
-    val linkCount: Int = 0
+    val linkCount: Int = 0,
+    val hasBlockedLinks: Boolean = false,
+    val suspiciousLinks: List<String> = emptyList(),
+    val maliciousLinks: List<String> = emptyList(),
+    val isSanitized: Boolean = false
 )
 
 object SmsAnalysisState {
@@ -47,7 +55,11 @@ object SmsAnalysisState {
                 scannedAt = latest.scannedAt,
                 history = history,
                 mlScore = latest.mlScore,
-                linkCount = latest.linkCount
+                linkCount = latest.linkCount,
+                hasBlockedLinks = latest.hasBlockedLinks,
+                suspiciousLinks = latest.suspiciousLinks,
+                maliciousLinks = latest.maliciousLinks,
+                isSanitized = latest.isSanitized
             )
         }
     }
@@ -62,7 +74,11 @@ object SmsAnalysisState {
         reasons: List<String>,
         scannedAt: String,
         mlScore: Int,
-        linkCount: Int
+        linkCount: Int,
+        hasBlockedLinks: Boolean = false,
+        suspiciousLinks: List<String> = emptyList(),
+        maliciousLinks: List<String> = emptyList(),
+        isSanitized: Boolean = false
     ) {
         val newItem = SmsHistoryItem(
             sender = sender,
@@ -73,7 +89,11 @@ object SmsAnalysisState {
             reasons = reasons,
             scannedAt = scannedAt,
             mlScore = mlScore,
-            linkCount = linkCount
+            linkCount = linkCount,
+            hasBlockedLinks = hasBlockedLinks,
+            suspiciousLinks = suspiciousLinks,
+            maliciousLinks = maliciousLinks,
+            isSanitized = isSanitized
         )
 
         val currentHistory = _uiState.value.history
@@ -99,7 +119,11 @@ object SmsAnalysisState {
             scannedAt = scannedAt,
             history = updatedHistory,
             mlScore = mlScore,
-            linkCount = linkCount
+            linkCount = linkCount,
+            hasBlockedLinks = hasBlockedLinks,
+            suspiciousLinks = suspiciousLinks,
+            maliciousLinks = maliciousLinks,
+            isSanitized = isSanitized
         )
 
         SmsStorage.saveHistory(context, updatedHistory)
