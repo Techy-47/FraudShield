@@ -19,6 +19,7 @@ class SmsReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != "android.provider.Telephony.SMS_RECEIVED") return
+        if (!ProtectionPrefs.isProtectionEnabled(context)) return
 
         try {
             val bundle: Bundle = intent.extras ?: return

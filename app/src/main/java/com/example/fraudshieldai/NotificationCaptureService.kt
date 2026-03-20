@@ -23,6 +23,7 @@ class NotificationCaptureService : NotificationListenerService() {
 
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
         if (sbn == null) return
+        if (!ProtectionPrefs.isProtectionEnabled(this)) return
 
         try {
             val packageName = sbn.packageName ?: return

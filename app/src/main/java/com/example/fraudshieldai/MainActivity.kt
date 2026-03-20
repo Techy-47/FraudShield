@@ -63,6 +63,14 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Textsms
 import androidx.compose.material3.Icon
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 
 class MainActivity : ComponentActivity() {
 
@@ -103,6 +111,7 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             FraudShieldApp()
+
         }
     }
 
@@ -702,7 +711,7 @@ fun HeaderCard() {
         modifier = Modifier
             .fillMaxWidth()
             .background(
-                color = Color(0xFF081225),
+                color = Color(0xFF87CEEB),
                 shape = RoundedCornerShape(bottomStart = 28.dp, bottomEnd = 28.dp)
             )
             .statusBarsPadding()
@@ -712,17 +721,14 @@ fun HeaderCard() {
             Row(
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Box(
+                Image(
+                    painter = painterResource(id = R.drawable.fraudshield_logo),
+                    contentDescription = "FraudShield Logo",
                     modifier = Modifier
                         .size(56.dp)
-                        .background(Color(0xFF1D4ED8), CircleShape),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = "🛡",
-                        style = MaterialTheme.typography.headlineMedium
-                    )
-                }
+                        .clip(CircleShape),
+                    contentScale = ContentScale.Crop
+                )
 
                 Spacer(modifier = Modifier.width(14.dp))
 
@@ -735,6 +741,8 @@ fun HeaderCard() {
                         fontSize = 28.sp,
                         fontWeight = FontWeight.Bold
                     )
+
+                    var protectionEnabled by rememberSaveable { mutableStateOf(true) }
 
                     Spacer(modifier = Modifier.height(6.dp))
 
@@ -751,7 +759,7 @@ fun HeaderCard() {
 
                         Text(
                             text = "Active Protection",
-                            color = Color(0xFF86EFAC),
+                            color = Color.White,
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Medium
                         )
