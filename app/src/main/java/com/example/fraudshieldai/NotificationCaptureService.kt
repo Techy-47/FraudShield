@@ -13,6 +13,7 @@ class NotificationCaptureService : NotificationListenerService() {
     private val supportedPackages = mapOf(
         "com.google.android.apps.messaging" to "Google Messages / RCS",
         "com.whatsapp" to "WhatsApp",
+        "com.whatsapp.w4b" to "WhatsApp Business",
         "com.google.android.gm" to "Gmail"
     )
 
@@ -21,18 +22,57 @@ class NotificationCaptureService : NotificationListenerService() {
         private var lastTimestamp: Long = 0L
     }
 
+    override fun onListenerConnected() {
+        super.onListenerConnected()
+        Log.d("NotificationCapture", "Listener connected")
+    }
+
+    override fun onListenerDisconnected() {
+        super.onListenerDisconnected()
+        Log.d("NotificationCapture", "Listener disconnected")
+    }
+
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
-        if (sbn == null) return
-        if (!ProtectionPrefs.isProtectionEnabled(this)) return
+        Log.d("NotificationCapture", "onNotificationPosted triggered")
+
+        if (sbn == null) {
+            Log.d("NotificationCapture", "Skipped: sbn is null")
+            return
+        }
+
+        val packageName = sbn.packageName ?: ""
+        Log.d("NotificationCapture", "Incoming package: $packageName")
 
         try {
-            val packageName = sbn.packageName ?: return
-            if (packageName == this.packageName) return
-            if (!supportedPackages.containsKey(packageName)) return
-            if (shouldIgnoreNotification(sbn)) return
+            if (packageName == this.packageName) {
+                Log.d("NotificationCapture", "Skipped: own app notification")
+                return
+            }
 
-            val notification = sbn.notification ?: return
-            val extras = notification.extras ?: return
+            if (!supportedPackages.containsKey(packageName)) {
+                Log.d("NotificationCapture", "Skipped: unsupported package $packageName")
+                return
+            }
+
+            // Temporary bypass removed from ProtectionPrefs for reliable testing
+            // Re-enable later if needed:
+            // if (!ProtectionPrefs.isProtectionEnabled(this)) return
+
+            // Temporary bypass of ignore logic for reliable testing
+            // Re-enable later if needed:
+            // if (shouldIgnoreNotification(sbn)) return
+
+            val notification = sbn.notification
+            if (notification == null) {
+                Log.d("NotificationCapture", "Skipped: notification is null")
+                return
+            }
+
+            val extras = notification.extras
+            if (extras == null) {
+                Log.d("NotificationCapture", "Skipped: extras are null")
+                return
+            }
 
             val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString()?.trim().orEmpty()
             val text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString()?.trim().orEmpty()
@@ -43,6 +83,12 @@ class NotificationCaptureService : NotificationListenerService() {
                 ?.mapNotNull { it?.toString()?.trim() }
                 ?.filter { it.isNotBlank() }
                 .orEmpty()
+
+            Log.d("NotificationCapture", "title=$title")
+            Log.d("NotificationCapture", "text=$text")
+            Log.d("NotificationCapture", "bigText=$bigText")
+            Log.d("NotificationCapture", "subText=$subText")
+            Log.d("NotificationCapture", "textLines=$textLines")
 
             val sourceName = supportedPackages[packageName] ?: packageName
             val senderTitle = cleanSender(title)
@@ -67,9 +113,20 @@ class NotificationCaptureService : NotificationListenerService() {
                 )
             }
 
-            if (visibleContent.isBlank()) return
-            if (visibleContent.lowercase().contains("sensitive notification content hidden")) return
-            if (isBackgroundNoise(visibleContent)) return
+            if (visibleContent.isBlank()) {
+                Log.d("NotificationCapture", "Skipped: visible content blank")
+                return
+            }
+
+            if (visibleContent.lowercase().contains("sensitive notification content hidden")) {
+                Log.d("NotificationCapture", "Skipped: sensitive content hidden")
+                return
+            }
+
+            if (isBackgroundNoise(visibleContent)) {
+                Log.d("NotificationCapture", "Skipped: background noise")
+                return
+            }
 
             val normalizedContent = visibleContent
                 .lowercase()
@@ -79,11 +136,20 @@ class NotificationCaptureService : NotificationListenerService() {
             val signature = "$packageName|$sender|$normalizedContent"
             val now = System.currentTimeMillis()
 
-            if (signature == lastSignature && now - lastTimestamp < 4000) return
+            if (signature == lastSignature && now - lastTimestamp < 4000) {
+                Log.d("NotificationCapture", "Skipped: duplicate notification")
+                return
+            }
+
             lastSignature = signature
             lastTimestamp = now
 
-            val isSaved = ContactTrustHelper.isSavedContact(this, senderTitle)
+            val isSaved = try {
+                ContactTrustHelper.isSavedContact(this, senderTitle)
+            } catch (e: Exception) {
+                Log.w("NotificationCapture", "Contact check failed: ${e.message}")
+                false
+            }
 
             val mlScore = try {
                 val scorer = TinyMlScorer(this)
